@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Динозаврик</title>
+<style>
+  :root { --bg:#f7f7f7; --fg:#535353; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#202124; --fg:#d0d0d0; } }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font-family:ui-monospace,Menlo,Consolas,monospace; overflow:hidden;
+    -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; touch-action:manipulation; }
+  body { display:flex; flex-direction:column; align-items:center; justify-content:center;
+    padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); box-sizing:border-box; }
+  #wrap { position:relative; width:100%; max-width:800px; }
+  canvas { width:100%; height:auto; display:block; }
+  #msg { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; text-align:center; font-size:clamp(14px,4vw,22px); pointer-events:none; gap:6px; }
+  #hint { margin-top:12px; font-size:13px; opacity:.6; text-align:center; padding:0 12px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="800" height="300"></canvas>
+  <div id="msg"><b>Тапни, чтобы начать</b></div>
+</div>
+<div id="hint">Тап по экрану — прыжок · Пробел / ↑ на компьютере · ↓ — пригнуться</div>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const msg = document.getElementById('msg');
+const W = 800, H = 300, GROUND = 250;
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+let best = 0;
+try { best = +localStorage.getItem('dinoBest') || 0; } catch(e){}
+
+let state = 'idle', dino, obstacles, clouds, speed, score, dist, frame, spawnIn, last;
+
+function reset() {
+  dino = { x:50, y:GROUND, w:40, h:44, vy:0, duck:false, onGround:true };
+  obstacles = []; speed = 6; score = 0; dist = 0; frame = 0; spawnIn = 60;
+  clouds = [{x:200,y:60},{x:520,y:90},{x:720,y:50}];
+}
+reset();
+
+function jump() {
+  if (state === 'idle') { start(); }
+  else if (state === 'over') { if (performance.now() - overAt > 400) start(); return; }
+  if (dino.onGround) { dino.vy = -13.5; dino.onGround = false; }
+}
+function start() { reset(); state = 'run'; msg.innerHTML = ''; last = performance.now(); requestAnimationFrame(loop); }
+let overAt = 0;
+function gameOver() {
+  state = 'over'; overAt = performance.now();
+  const s = Math.floor(score);
+  if (s > best) { best = s; try { localStorage.setItem('dinoBest', best); } catch(e){} }
+  msg.innerHTML = '<b>Игра окончена</b><span>Счёт: ' + s + ' · Рекорд: ' + best + '</span><span>Тапни, чтобы повторить</span>';
+  if (navigator.vibrate) navigator.vibrate(120);
+}
+
+// Управление
+addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); }
+  if (e.code === 'ArrowDown') { dino.duck = true; }
+});
+addEventListener('keyup', e => { if (e.code === 'ArrowDown') dino.duck = false; });
+addEventListener('pointerdown', e => { e.preventDefault(); jump(); });
+
+function spawn() {
+  const r = Math.random();
+  if (r < 0.25 && score > 200) {
+    const hs = [GROUND-30, GROUND-60, GROUND-90];
+    obstacles.push({ type:'bird', x:W+20, y:hs[Math.floor(Math.random()*3)], w:40, h:28 });
+  } else {
+    const n = 1 + Math.floor(Math.random()*3), h = 34 + Math.random()*22;
+    obstacles.push({ type:'cactus', x:W+20, y:GROUND, w:16*n+4, h, n });
+  }
+  spawnIn = 50 + Math.random()*60 + (14 - speed) * 4;
+}
+
+function update(dt) {
+  frame += dt;
+  dist += speed * dt; score = dist / 10;
+  speed = Math.min(14, 6 + score / 150);
+
+  // динозавр
+  if (!dino.onGround) {
+    dino.vy += 0.7 * dt * (dino.duck ? 2 : 1);
+    dino.y += dino.vy * dt;
+    if (dino.y >= GROUND) { dino.y = GROUND; dino.vy = 0; dino.onGround = true; }
+  }
+
+  spawnIn -= dt; if (spawnIn <= 0) spawn();
+  obstacles.forEach(o => o.x -= speed * dt);
+  obstacles = obstacles.filter(o => o.x + o.w > -10);
+  clouds.forEach(c => { c.x -= 0.6 * dt; if (c.x < -60) { c.x = W + 40; c.y = 30 + Math.random()*80; } });
+
+  // столкновения (чуть щадящие хитбоксы)
+  const dh = dino.duck && dino.onGround ? 26 : dino.h;
+  const d = { x:dino.x+6, y:dino.y-dh+4, w:dino.w-12, h:dh-8 };
+  for (const o of obstacles) {
+    const b = { x:o.x+3, y:o.y-o.h+3, w:o.w-6, h:o.h-6 };
+    if (d.x < b.x+b.w && d.x+d.w > b.x && d.y < b.y+b.h && d.y+d.h > b.y) { gameOver(); return; }
+  }
+}
+
+function draw() {
+  const fg = css('--fg');
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = fg; ctx.strokeStyle = fg;
+
+  // земля
+  ctx.globalAlpha = .6; ctx.fillRect(0, GROUND+2, W, 2);
+  for (let i = 0; i < 20; i++) {
+    const gx = ((i * 97 - dist * 1) % W + W) % W;
+    ctx.fillRect(gx, GROUND + 10 + (i % 3) * 5, 6 + (i % 4) * 3, 2);
+  }
+  // облака
+  ctx.globalAlpha = .25;
+  clouds.forEach(c => { ctx.fillRect(c.x, c.y, 50, 10); ctx.fillRect(c.x+10, c.y-8, 28, 8); });
+  ctx.globalAlpha = 1;
+
+  // препятствия
+  obstacles.forEach(o => {
+    if (o.type === 'cactus') {
+      for (let i = 0; i < o.n; i++) {
+        const cx = o.x + i * 16 + 2, ch = o.h - (i % 2) * 8;
+        ctx.fillRect(cx+4, o.y-ch, 8, ch);
+        ctx.fillRect(cx, o.y-ch*0.65, 4, 14); ctx.fillRect(cx, o.y-ch*0.65+10, 8, 4);
+        ctx.fillRect(cx+12, o.y-ch*0.8, 4, 14); ctx.fillRect(cx+8, o.y-ch*0.8+10, 8, 4);
+      }
+    } else {
+      const flap = Math.floor(frame / 8) % 2;
+      ctx.fillRect(o.x+8, o.y-o.h+10, 26, 10);
+      ctx.fillRect(o.x, o.y-o.h+12, 10, 4);
+      ctx.fillRect(o.x+30, o.y-o.h+8, 10, 6);
+      ctx.fillRect(o.x+14, flap ? o.y-o.h : o.y-o.h+20, 10, 10);
+    }
+  });
+
+  // динозавр
+  const x = dino.x, y = dino.y;
+  const ducking = dino.duck && dino.onGround;
+  ctx.fillStyle = fg;
+  if (ducking) {
+    ctx.fillRect(x, y-24, 44, 18);          // тело
+    ctx.fillRect(x+30, y-30, 20, 14);       // голова
+    ctx.fillRect(x-6, y-20, 8, 6);          // хвост
+  } else {
+    ctx.fillRect(x+6, y-30, 22, 22);        // тело
+    ctx.fillRect(x+16, y-44, 24, 18);       // голова
+    ctx.fillRect(x+34, y-32, 8, 4);         // подбородок
+    ctx.fillRect(x, y-24, 8, 8);            // хвост
+    ctx.fillRect(x+22, y-24, 8, 4);         // ручка
+  }
+  // ноги
+  const step = dino.onGround && state === 'run' ? Math.floor(frame / 6) % 2 : 0;
+  ctx.fillRect(x+10, y-8, 6, step ? 8 : 4);
+  ctx.fillRect(x+20, y-8, 6, step ? 4 : 8);
+  // глаз
+  ctx.fillStyle = css('--bg');
+  if (ducking) ctx.fillRect(x+42, y-26, 4, 4); else ctx.fillRect(x+32, y-40, 4, 4);
+
+  // счёт
+  ctx.fillStyle = fg; ctx.font = 'bold 20px ui-monospace, monospace'; ctx.textAlign = 'right';
+  ctx.fillText('HI ' + String(best).padStart(5,'0') + '  ' + String(Math.floor(score)).padStart(5,'0'), W-14, 28);
+}
+
+function loop(t) {
+  if (state !== 'run') { draw(); return; }
+  const dt = Math.min(2.5, (t - last) / 16.667); last = t;
+  update(dt);
+  draw();
+  if (state === 'run') requestAnimationFrame(loop);
+}
+draw();
+</script>
+</body>
+</html>
